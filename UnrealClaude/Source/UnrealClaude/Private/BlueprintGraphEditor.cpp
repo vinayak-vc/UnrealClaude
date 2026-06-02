@@ -22,6 +22,8 @@
 #include "GameFramework/PlayerController.h"
 #include "Components/ActorComponent.h"
 #include "Components/SceneComponent.h"
+#include "Kismet/GameplayStatics.h"
+#include "EnhancedInputSubsystems.h"
 
 volatile int32 FBlueprintGraphEditor::NodeIdCounter = 0;
 const FString FBlueprintGraphEditor::NodeIdPrefix = TEXT("MCP_ID:");
@@ -123,13 +125,27 @@ UEdGraphNode* FBlueprintGraphEditor::CreateNode(
 	}
 	else if (NodeType.Equals(TEXT("VariableGet"), ESearchCase::IgnoreCase) || NodeType.Equals(TEXT("GetVariable"), ESearchCase::IgnoreCase))
 	{
-		FString VariableName = NodeParams.IsValid() ? NodeParams->GetStringField(TEXT("variable")) : TEXT("");
+		// Accept "variable" (canonical) or "variable_name" (common alias) — both are valid
+		FString VariableName;
+		if (NodeParams.IsValid())
+		{
+			VariableName = NodeParams->GetStringField(TEXT("variable"));
+			if (VariableName.IsEmpty())
+				VariableName = NodeParams->GetStringField(TEXT("variable_name"));
+		}
 		Context = VariableName;
 		NewNode = CreateVariableGetNode(Graph, Blueprint, VariableName, PosX, PosY, OutError);
 	}
 	else if (NodeType.Equals(TEXT("VariableSet"), ESearchCase::IgnoreCase) || NodeType.Equals(TEXT("SetVariable"), ESearchCase::IgnoreCase))
 	{
-		FString VariableName = NodeParams.IsValid() ? NodeParams->GetStringField(TEXT("variable")) : TEXT("");
+		// Accept "variable" (canonical) or "variable_name" (common alias) — both are valid
+		FString VariableName;
+		if (NodeParams.IsValid())
+		{
+			VariableName = NodeParams->GetStringField(TEXT("variable"));
+			if (VariableName.IsEmpty())
+				VariableName = NodeParams->GetStringField(TEXT("variable_name"));
+		}
 		Context = VariableName;
 		NewNode = CreateVariableSetNode(Graph, Blueprint, VariableName, PosX, PosY, OutError);
 	}
@@ -662,6 +678,9 @@ UClass* FBlueprintGraphEditor::FindClassByShortName(const FString& ClassName)
 		CommonClasses.Add(TEXT("SceneComponent"),   USceneComponent::StaticClass());
 		CommonClasses.Add(TEXT("KismetSystemLibrary"), UKismetSystemLibrary::StaticClass());
 		CommonClasses.Add(TEXT("KismetMathLibrary"),   UKismetMathLibrary::StaticClass());
+		CommonClasses.Add(TEXT("GameplayStatics"),     UGameplayStatics::StaticClass());
+		CommonClasses.Add(TEXT("UGameplayStatics"),    UGameplayStatics::StaticClass());
+		CommonClasses.Add(TEXT("EnhancedInputLocalPlayerSubsystem"), UEnhancedInputLocalPlayerSubsystem::StaticClass());
 	}
 	if (UClass** Found = CommonClasses.Find(ClassName))
 	{
@@ -720,14 +739,24 @@ UEdGraphNode* FBlueprintGraphEditor::CreateCallFunctionNode(
 		Function = BP->GeneratedClass->FindFunctionByName(FName(*FunctionName), EIncludeSuperFlag::IncludeSuper);
 	}
 
-	// 3. Kismet libraries
+	// 3. Kismet libraries (IncludeSuper so inherited/interface methods are found)
 	if (!Function)
 	{
-		Function = UKismetSystemLibrary::StaticClass()->FindFunctionByName(FName(*FunctionName));
+		Function = UKismetSystemLibrary::StaticClass()->FindFunctionByName(FName(*FunctionName), EIncludeSuperFlag::IncludeSuper);
 	}
 	if (!Function)
 	{
-		Function = UKismetMathLibrary::StaticClass()->FindFunctionByName(FName(*FunctionName));
+		Function = UKismetMathLibrary::StaticClass()->FindFunctionByName(FName(*FunctionName), EIncludeSuperFlag::IncludeSuper);
+	}
+
+	// 3b. GameplayStatics and EnhancedInput subsystem
+	if (!Function)
+	{
+		Function = UGameplayStatics::StaticClass()->FindFunctionByName(FName(*FunctionName), EIncludeSuperFlag::IncludeSuper);
+	}
+	if (!Function)
+	{
+		Function = UEnhancedInputLocalPlayerSubsystem::StaticClass()->FindFunctionByName(FName(*FunctionName), EIncludeSuperFlag::IncludeSuper);
 	}
 
 	// 4. Common engine actor/component classes
@@ -997,22 +1026,28 @@ UEdGraphNode* FBlueprintGraphEditor::CreateMathNode(
 	int32 PosY,
 	FString& OutError)
 {
+	// UE5 promoted float→double; try float variant first, fall back to double variant
 	FName FunctionName;
+	FName FunctionNameDouble;
 	if (MathOp.Equals(TEXT("Add"), ESearchCase::IgnoreCase))
 	{
-		FunctionName = FName("Add_FloatFloat");
+		FunctionName       = FName("Add_FloatFloat");
+		FunctionNameDouble = FName("Add_DoubleDouble");
 	}
 	else if (MathOp.Equals(TEXT("Subtract"), ESearchCase::IgnoreCase))
 	{
-		FunctionName = FName("Subtract_FloatFloat");
+		FunctionName       = FName("Subtract_FloatFloat");
+		FunctionNameDouble = FName("Subtract_DoubleDouble");
 	}
 	else if (MathOp.Equals(TEXT("Multiply"), ESearchCase::IgnoreCase))
 	{
-		FunctionName = FName("Multiply_FloatFloat");
+		FunctionName       = FName("Multiply_FloatFloat");
+		FunctionNameDouble = FName("Multiply_DoubleDouble");
 	}
 	else if (MathOp.Equals(TEXT("Divide"), ESearchCase::IgnoreCase))
 	{
-		FunctionName = FName("Divide_FloatFloat");
+		FunctionName       = FName("Divide_FloatFloat");
+		FunctionNameDouble = FName("Divide_DoubleDouble");
 	}
 	else
 	{
@@ -1020,10 +1055,14 @@ UEdGraphNode* FBlueprintGraphEditor::CreateMathNode(
 		return nullptr;
 	}
 
-	UFunction* MathFunc = UKismetMathLibrary::StaticClass()->FindFunctionByName(FunctionName);
+	UFunction* MathFunc = UKismetMathLibrary::StaticClass()->FindFunctionByName(FunctionName, EIncludeSuperFlag::IncludeSuper);
 	if (!MathFunc)
 	{
-		OutError = FString::Printf(TEXT("Math function '%s' not found"), *FunctionName.ToString());
+		MathFunc = UKismetMathLibrary::StaticClass()->FindFunctionByName(FunctionNameDouble, EIncludeSuperFlag::IncludeSuper);
+	}
+	if (!MathFunc)
+	{
+		OutError = FString::Printf(TEXT("Math function '%s' (or '%s') not found"), *FunctionName.ToString(), *FunctionNameDouble.ToString());
 		return nullptr;
 	}
 
