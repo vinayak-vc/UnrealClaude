@@ -221,6 +221,10 @@ private:
 	static UEdGraphNode* CreateVariableSetNode(UEdGraph* Graph, UBlueprint* Blueprint, const FString& VariableName, int32 PosX, int32 PosY, FString& OutError);
 	static UEdGraphNode* CreateSequenceNode(UEdGraph* Graph, int32 NumOutputs, int32 PosX, int32 PosY, FString& OutError);
 	static UEdGraphNode* CreateMathNode(UEdGraph* Graph, const FString& MathOp, int32 PosX, int32 PosY, FString& OutError);
+	static UEdGraphNode* CreateEnhancedInputActionNode(UEdGraph* Graph, const FString& ActionPath, int32 PosX, int32 PosY, FString& OutError);
+
+	/** Search for a UClass by short name across common engine script packages */
+	static UClass* FindClassByShortName(const FString& ClassName);
 
 	static const FString NodeIdPrefix;
 };

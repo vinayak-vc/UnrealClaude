@@ -61,7 +61,8 @@ public class UnrealClaude : ModuleRules
 				// Asset saving
 				"EditorScriptingUtilities",
 				// Enhanced Input
-				"EnhancedInput"
+				"EnhancedInput",
+				"InputBlueprintNodes"
 			}
 		);
 

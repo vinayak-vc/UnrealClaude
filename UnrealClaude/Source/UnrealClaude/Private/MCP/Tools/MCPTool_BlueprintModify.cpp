@@ -6,6 +6,7 @@
 #include "MCP/MCPBlueprintLoadContext.h"
 #include "UnrealClaudeModule.h"
 #include "Engine/Blueprint.h"
+#include "K2Node_FunctionEntry.h"
 
 namespace BlueprintModifyOps
 {
@@ -268,6 +269,59 @@ FMCPToolResult FMCPTool_BlueprintModify::ExecuteAddFunction(const TSharedRef<FJs
 	if (!FBlueprintUtils::AddFunction(Context.Blueprint, FunctionName, AddError))
 	{
 		return FMCPToolResult::Error(AddError);
+	}
+
+	// Handle optional 'inputs' array — add user-defined pins to the FunctionEntry node
+	const TArray<TSharedPtr<FJsonValue>>* InputsArray;
+	if (Params->TryGetArrayField(TEXT("inputs"), InputsArray) && InputsArray->Num() > 0)
+	{
+		// Find the newly created function graph
+		UEdGraph* FuncGraph = nullptr;
+		for (UEdGraph* Graph : Context.Blueprint->FunctionGraphs)
+		{
+			if (Graph && Graph->GetName() == FunctionName)
+			{
+				FuncGraph = Graph;
+				break;
+			}
+		}
+
+		if (FuncGraph)
+		{
+			UK2Node_FunctionEntry* EntryNode = nullptr;
+			for (UEdGraphNode* Node : FuncGraph->Nodes)
+			{
+				EntryNode = Cast<UK2Node_FunctionEntry>(Node);
+				if (EntryNode) break;
+			}
+
+			if (EntryNode)
+			{
+				for (const TSharedPtr<FJsonValue>& InputVal : *InputsArray)
+				{
+					const TSharedPtr<FJsonObject>* InputObj;
+					if (!InputVal->TryGetObject(InputObj)) continue;
+
+					FString PinName  = (*InputObj)->GetStringField(TEXT("name"));
+					FString PinTypeStr = (*InputObj)->GetStringField(TEXT("type"));
+					if (PinName.IsEmpty() || PinTypeStr.IsEmpty()) continue;
+
+					FEdGraphPinType PinType;
+					FString TypeError;
+					if (FBlueprintUtils::ParsePinType(PinTypeStr, PinType, TypeError))
+					{
+						EntryNode->CreateUserDefinedPin(FName(*PinName), PinType, EGPD_Output);
+					}
+					else
+					{
+						UE_LOG(LogUnrealClaude, Warning,
+							TEXT("add_function '%s': could not parse input type '%s' for pin '%s': %s"),
+							*FunctionName, *PinTypeStr, *PinName, *TypeError);
+					}
+				}
+				EntryNode->ReconstructNode();
+			}
+		}
 	}
 
 	if (auto CompileError = Context.CompileAndFinalize(TEXT("Function added")))

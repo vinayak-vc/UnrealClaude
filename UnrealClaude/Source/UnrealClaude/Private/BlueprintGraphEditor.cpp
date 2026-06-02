@@ -14,6 +14,14 @@
 #include "Kismet/KismetSystemLibrary.h"
 #include "Kismet/KismetMathLibrary.h"
 #include "HAL/PlatformAtomics.h"
+#include "K2Node_EnhancedInputAction.h"
+#include "InputAction.h"
+#include "GameFramework/Actor.h"
+#include "GameFramework/Pawn.h"
+#include "GameFramework/Controller.h"
+#include "GameFramework/PlayerController.h"
+#include "Components/ActorComponent.h"
+#include "Components/SceneComponent.h"
 
 volatile int32 FBlueprintGraphEditor::NodeIdCounter = 0;
 const FString FBlueprintGraphEditor::NodeIdPrefix = TEXT("MCP_ID:");
@@ -145,9 +153,15 @@ UEdGraphNode* FBlueprintGraphEditor::CreateNode(
 		Context = TEXT("PrintString");
 		NewNode = CreateCallFunctionNode(Graph, TEXT("PrintString"), TEXT("KismetSystemLibrary"), PosX, PosY, OutError);
 	}
+	else if (NodeType.Equals(TEXT("EnhancedInputAction"), ESearchCase::IgnoreCase))
+	{
+		FString ActionPath = NodeParams.IsValid() ? NodeParams->GetStringField(TEXT("action_path")) : TEXT("");
+		Context = ActionPath;
+		NewNode = CreateEnhancedInputActionNode(Graph, ActionPath, PosX, PosY, OutError);
+	}
 	else
 	{
-		OutError = FString::Printf(TEXT("Unknown node type: '%s'. Supported: CallFunction, Branch, Event, VariableGet, VariableSet, Sequence, Add, Subtract, Multiply, Divide, PrintString"), *NodeType);
+		OutError = FString::Printf(TEXT("Unknown node type: '%s'. Supported: CallFunction, Branch, Event, VariableGet, VariableSet, Sequence, Add, Subtract, Multiply, Divide, PrintString, EnhancedInputAction"), *NodeType);
 		return nullptr;
 	}
 
@@ -619,6 +633,59 @@ FString FBlueprintGraphEditor::GetNodeId(UEdGraphNode* Node)
 
 // ===== Private Node Creation Helpers =====
 
+UClass* FBlueprintGraphEditor::FindClassByShortName(const FString& ClassName)
+{
+	if (ClassName.IsEmpty()) return nullptr;
+
+	// Already a full path (contains '.')
+	if (ClassName.Contains(TEXT(".")))
+	{
+		UClass* C = FindObject<UClass>(nullptr, *ClassName);
+		if (C) return C;
+	}
+
+	// Hardcoded common engine classes by short name
+	static TMap<FString, UClass*> CommonClasses;
+	static bool bInitialised = false;
+	if (!bInitialised)
+	{
+		bInitialised = true;
+		CommonClasses.Add(TEXT("Actor"),            AActor::StaticClass());
+		CommonClasses.Add(TEXT("AActor"),           AActor::StaticClass());
+		CommonClasses.Add(TEXT("Pawn"),             APawn::StaticClass());
+		CommonClasses.Add(TEXT("APawn"),            APawn::StaticClass());
+		CommonClasses.Add(TEXT("Controller"),       AController::StaticClass());
+		CommonClasses.Add(TEXT("AController"),      AController::StaticClass());
+		CommonClasses.Add(TEXT("PlayerController"), APlayerController::StaticClass());
+		CommonClasses.Add(TEXT("APlayerController"),APlayerController::StaticClass());
+		CommonClasses.Add(TEXT("ActorComponent"),   UActorComponent::StaticClass());
+		CommonClasses.Add(TEXT("SceneComponent"),   USceneComponent::StaticClass());
+		CommonClasses.Add(TEXT("KismetSystemLibrary"), UKismetSystemLibrary::StaticClass());
+		CommonClasses.Add(TEXT("KismetMathLibrary"),   UKismetMathLibrary::StaticClass());
+	}
+	if (UClass** Found = CommonClasses.Find(ClassName))
+	{
+		return *Found;
+	}
+
+	// Try script package paths
+	static const TArray<FString> PackagePrefixes = {
+		TEXT("/Script/Engine."),
+		TEXT("/Script/CoreUObject."),
+		TEXT("/Script/EnhancedInput."),
+		TEXT("/Script/UMG."),
+		TEXT("/Script/AIModule."),
+		TEXT("/Script/GameplayAbilities."),
+	};
+	for (const FString& Prefix : PackagePrefixes)
+	{
+		UClass* C = FindObject<UClass>(nullptr, *(Prefix + ClassName));
+		if (C) return C;
+	}
+
+	return nullptr;
+}
+
 UEdGraphNode* FBlueprintGraphEditor::CreateCallFunctionNode(
 	UEdGraph* Graph,
 	const FString& FunctionName,
@@ -634,36 +701,26 @@ UEdGraphNode* FBlueprintGraphEditor::CreateCallFunctionNode(
 	}
 
 	UFunction* Function = nullptr;
-	UClass* FunctionOwner = nullptr;
 
+	// 1. If target_class specified, try it first
 	if (!TargetClass.IsEmpty())
 	{
-		FunctionOwner = FindObject<UClass>(nullptr, *TargetClass);
-		if (!FunctionOwner)
+		UClass* Owner = FindClassByShortName(TargetClass);
+		if (Owner)
 		{
-			// FindObject misses Kismet libraries; resolve by hardcoded name as a fallback
-			if (TargetClass.Equals(TEXT("KismetSystemLibrary"), ESearchCase::IgnoreCase))
-			{
-				FunctionOwner = UKismetSystemLibrary::StaticClass();
-			}
-			else if (TargetClass.Equals(TEXT("KismetMathLibrary"), ESearchCase::IgnoreCase))
-			{
-				FunctionOwner = UKismetMathLibrary::StaticClass();
-			}
+			// Search including inherited functions
+			Function = Owner->FindFunctionByName(FName(*FunctionName), EIncludeSuperFlag::IncludeSuper);
 		}
 	}
-	else
+
+	// 2. Blueprint's own generated class (self-functions like custom BP functions)
+	UBlueprint* BP = FBlueprintEditorUtils::FindBlueprintForGraph(Graph);
+	if (!Function && BP && BP->GeneratedClass)
 	{
-		// Most common functions live in KismetSystemLibrary; pick it as the default search class
-		FunctionOwner = UKismetSystemLibrary::StaticClass();
+		Function = BP->GeneratedClass->FindFunctionByName(FName(*FunctionName), EIncludeSuperFlag::IncludeSuper);
 	}
 
-	if (FunctionOwner)
-	{
-		Function = FunctionOwner->FindFunctionByName(FName(*FunctionName));
-	}
-
-	// Fall back to scanning the two Kismet libraries when the caller's target_class lookup misses
+	// 3. Kismet libraries
 	if (!Function)
 	{
 		Function = UKismetSystemLibrary::StaticClass()->FindFunctionByName(FName(*FunctionName));
@@ -673,9 +730,27 @@ UEdGraphNode* FBlueprintGraphEditor::CreateCallFunctionNode(
 		Function = UKismetMathLibrary::StaticClass()->FindFunctionByName(FName(*FunctionName));
 	}
 
+	// 4. Common engine actor/component classes
 	if (!Function)
 	{
-		OutError = FString::Printf(TEXT("Function '%s' not found"), *FunctionName);
+		static const TArray<UClass*> EngineSearchClasses = {
+			AActor::StaticClass(),
+			APawn::StaticClass(),
+			AController::StaticClass(),
+			APlayerController::StaticClass(),
+			UActorComponent::StaticClass(),
+			USceneComponent::StaticClass(),
+		};
+		for (UClass* SearchClass : EngineSearchClasses)
+		{
+			Function = SearchClass->FindFunctionByName(FName(*FunctionName), EIncludeSuperFlag::IncludeSuper);
+			if (Function) break;
+		}
+	}
+
+	if (!Function)
+	{
+		OutError = FString::Printf(TEXT("Function '%s' not found. Tip: pass target_class to narrow search (e.g. \"Actor\", \"KismetSystemLibrary\")"), *FunctionName);
 		return nullptr;
 	}
 
@@ -876,6 +951,43 @@ UEdGraphNode* FBlueprintGraphEditor::CreateSequenceNode(
 	}
 
 	return SeqNode;
+}
+
+UEdGraphNode* FBlueprintGraphEditor::CreateEnhancedInputActionNode(
+	UEdGraph* Graph,
+	const FString& ActionPath,
+	int32 PosX,
+	int32 PosY,
+	FString& OutError)
+{
+	FGraphNodeCreator<UK2Node_EnhancedInputAction> NodeCreator(*Graph);
+	UK2Node_EnhancedInputAction* InputNode = NodeCreator.CreateNode();
+
+	if (!ActionPath.IsEmpty())
+	{
+		UInputAction* InputAction = LoadObject<UInputAction>(nullptr, *ActionPath);
+		if (!InputAction)
+		{
+			// Try appending the asset name (e.g. /Game/Controls/IA_Key1 -> /Game/Controls/IA_Key1.IA_Key1)
+			FString AssetName = FPaths::GetBaseFilename(ActionPath);
+			FString FullPath = ActionPath + TEXT(".") + AssetName;
+			InputAction = LoadObject<UInputAction>(nullptr, *FullPath);
+		}
+		if (InputAction)
+		{
+			InputNode->InputAction = InputAction;
+		}
+		else
+		{
+			UE_LOG(LogUnrealClaude, Warning, TEXT("CreateEnhancedInputActionNode: InputAction not found at '%s' — node created without action reference"), *ActionPath);
+		}
+	}
+
+	InputNode->NodePosX = PosX;
+	InputNode->NodePosY = PosY;
+	NodeCreator.Finalize();
+
+	return InputNode;
 }
 
 UEdGraphNode* FBlueprintGraphEditor::CreateMathNode(
