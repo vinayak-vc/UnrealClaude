@@ -457,7 +457,24 @@ FMCPToolResult FMCPTool_EnhancedInput::ExecuteAddTrigger(const TSharedRef<FJsonO
 		return FMCPToolResult::Error(TriggerError);
 	}
 
-	Mappings[MappingIndex].Triggers.Add(Trigger);
+	// Purge null entries left by editor or prior corrupt saves — prevents [null, Pressed] arrays
+	Mappings[MappingIndex].Triggers.RemoveAll([](UInputTrigger* T) { return T == nullptr; });
+
+	// Replace if same trigger type already present — avoids duplicate Pressed+Pressed etc.
+	bool bReplaced = false;
+	for (UInputTrigger*& Existing : Mappings[MappingIndex].Triggers)
+	{
+		if (Existing && Existing->GetClass() == Trigger->GetClass())
+		{
+			Existing = Trigger;
+			bReplaced = true;
+			break;
+		}
+	}
+	if (!bReplaced)
+	{
+		Mappings[MappingIndex].Triggers.Add(Trigger);
+	}
 
 	Context->MarkPackageDirty();
 	FString SaveError;
@@ -1018,6 +1035,32 @@ int32 FMCPTool_EnhancedInput::FindMappingIndex(
 		return MappingIndex;
 	}
 
+	// Key-specific lookup — required when multiple keys share the same action (e.g. WASD → IA_Move).
+	// Without this, all add_trigger/add_modifier calls land on the first matching mapping regardless
+	// of which key was specified.
+	FString KeyName = ExtractOptionalString(Params, TEXT("key"));
+	if (!KeyName.IsEmpty())
+	{
+		FString KeyParseError;
+		FKey Key = ParseKey(KeyName, KeyParseError);
+		if (Key.IsValid())
+		{
+			for (int32 i = 0; i < Mappings.Num(); ++i)
+			{
+				if (Mappings[i].Action == Action && Mappings[i].Key == Key)
+				{
+					return i;
+				}
+			}
+			// Key was specified but no match found — error rather than silently falling back
+			OutError = FString::Printf(
+				TEXT("No mapping found for action '%s' with key '%s' in context '%s'. Use query_context to verify."),
+				*Action->GetName(), *KeyName, *Context->GetName());
+			return -1;
+		}
+	}
+
+	// No key specified — fall back to first mapping for this action
 	for (int32 i = 0; i < Mappings.Num(); ++i)
 	{
 		if (Mappings[i].Action == Action)
