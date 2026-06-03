@@ -82,6 +82,10 @@ FMCPToolResult FMCPTool_BlueprintModify::Execute(const TSharedRef<FJsonObject>& 
 	{
 		return ExecuteSetPinValue(Params);
 	}
+	if (Operation == TEXT("bulk_connect"))
+	{
+		return ExecuteBulkConnect(Params);
+	}
 
 	return FMCPToolResult::Error(FString::Printf(
 		TEXT("Unknown operation: '%s'. Valid: create, add_variable, remove_variable, add_function, remove_function, add_node, add_nodes, delete_node, connect_pins, disconnect_pins, set_pin_value"),
@@ -958,4 +962,81 @@ FMCPToolResult FMCPTool_BlueprintModify::ExecuteSetPinValue(const TSharedRef<FJs
 		FString::Printf(TEXT("Set '%s.%s' = '%s'"), *NodeId, *PinName, *PinValue),
 		ResultData
 	);
+}
+
+FMCPToolResult FMCPTool_BlueprintModify::ExecuteBulkConnect(const TSharedRef<FJsonObject>& Params)
+{
+	const TArray<TSharedPtr<FJsonValue>>* ConnectionsArray;
+	if (!Params->TryGetArrayField(TEXT("connections"), ConnectionsArray) || ConnectionsArray->Num() == 0)
+	{
+		return FMCPToolResult::Error(TEXT("'connections' array is required and must be non-empty"));
+	}
+
+	FString GraphName     = ExtractOptionalString(Params, TEXT("graph_name"), TEXT(""));
+	bool bFunctionGraph   = ExtractOptionalBool(Params, TEXT("is_function_graph"), false);
+
+	FMCPBlueprintLoadContext Context;
+	if (auto LoadError = Context.LoadAndValidate(Params)) return LoadError.GetValue();
+
+	FString GraphError;
+	UEdGraph* Graph = FBlueprintUtils::FindGraph(Context.Blueprint, GraphName, bFunctionGraph, GraphError);
+	if (!Graph) return FMCPToolResult::Error(GraphError);
+
+	int32 SuccessCount = 0;
+	TArray<TSharedPtr<FJsonValue>> FailuresArr;
+
+	for (int32 i = 0; i < ConnectionsArray->Num(); ++i)
+	{
+		const TSharedPtr<FJsonObject>* ConnSpec;
+		if (!(*ConnectionsArray)[i]->TryGetObject(ConnSpec)) continue;
+
+		// Accept from_node/to_node and source_node_id/target_node_id aliases
+		auto ReadField = [&](const TCHAR* Key, const TCHAR* Alias) -> FString {
+			FString V = (*ConnSpec)->GetStringField(Key);
+			if (V.IsEmpty()) V = (*ConnSpec)->GetStringField(Alias);
+			return V;
+		};
+
+		const FString SrcNode = ReadField(TEXT("source_node_id"), TEXT("from_node"));
+		const FString TgtNode = ReadField(TEXT("target_node_id"), TEXT("to_node"));
+		const FString SrcPin  = ReadField(TEXT("source_pin"),     TEXT("from_pin"));
+		const FString TgtPin  = ReadField(TEXT("target_pin"),     TEXT("to_pin"));
+
+		if (SrcNode.IsEmpty() || TgtNode.IsEmpty())
+		{
+			TSharedPtr<FJsonObject> Failure = MakeShared<FJsonObject>();
+			Failure->SetNumberField(TEXT("index"), i);
+			Failure->SetStringField(TEXT("error"), TEXT("Missing source_node_id or target_node_id"));
+			FailuresArr.Add(MakeShared<FJsonValueObject>(Failure));
+			continue;
+		}
+
+		FString ConnectError;
+		if (FBlueprintUtils::ConnectPins(Graph, SrcNode, SrcPin, TgtNode, TgtPin, ConnectError))
+		{
+			SuccessCount++;
+		}
+		else
+		{
+			TSharedPtr<FJsonObject> Failure = MakeShared<FJsonObject>();
+			Failure->SetNumberField(TEXT("index"),       i);
+			Failure->SetStringField(TEXT("source_node"), SrcNode);
+			Failure->SetStringField(TEXT("target_node"), TgtNode);
+			Failure->SetStringField(TEXT("error"),       ConnectError);
+			FailuresArr.Add(MakeShared<FJsonValueObject>(Failure));
+		}
+	}
+
+	if (auto CompileError = Context.CompileAndFinalize(TEXT("Bulk connect"))) return CompileError.GetValue();
+
+	TSharedPtr<FJsonObject> ResultData = Context.BuildResultJson();
+	ResultData->SetNumberField(TEXT("total"),    ConnectionsArray->Num());
+	ResultData->SetNumberField(TEXT("success"),  SuccessCount);
+	ResultData->SetNumberField(TEXT("failed"),   FailuresArr.Num());
+	ResultData->SetArrayField(TEXT("failures"),  FailuresArr);
+
+	const bool bAllOk = FailuresArr.Num() == 0;
+	return bAllOk
+		? FMCPToolResult::Success(FString::Printf(TEXT("Bulk connected %d pin pair(s)"), SuccessCount), ResultData)
+		: FMCPToolResult::Success(FString::Printf(TEXT("Bulk connected %d/%d (see failures)"), SuccessCount, ConnectionsArray->Num()), ResultData);
 }

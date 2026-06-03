@@ -65,7 +65,9 @@ public class UnrealClaude : ModuleRules
 				"InputBlueprintNodes",
 				// Niagara particle system
 				"Niagara",
-				"NiagaraEditor"
+				"NiagaraEditor",
+				// UMG for WidgetBlueprintLibrary (SetInputMode_*)
+				"UMG"
 			}
 		);
 

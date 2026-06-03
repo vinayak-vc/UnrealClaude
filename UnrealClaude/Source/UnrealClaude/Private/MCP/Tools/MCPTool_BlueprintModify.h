@@ -125,6 +125,7 @@ private:
 	FMCPToolResult ExecuteConnectPins(const TSharedRef<FJsonObject>& Params);
 	FMCPToolResult ExecuteDisconnectPins(const TSharedRef<FJsonObject>& Params);
 	FMCPToolResult ExecuteSetPinValue(const TSharedRef<FJsonObject>& Params);
+	FMCPToolResult ExecuteBulkConnect(const TSharedRef<FJsonObject>& Params);
 
 	EBlueprintType ParseBlueprintType(const FString& TypeString);
 

@@ -26,7 +26,9 @@
 #include "K2Node_CustomEvent.h"
 #include "K2Node_Select.h"
 #include "K2Node_Timeline.h"
+#include "K2Node_GetSubsystem.h"
 #include "Engine/TimelineTemplate.h"
+#include "Blueprint/WidgetBlueprintLibrary.h"
 #include "InputAction.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/Pawn.h"
@@ -286,6 +288,22 @@ UEdGraphNode* FBlueprintGraphEditor::CreateNode(
 		Context = TimelineName;
 		NewNode = CreateTimelineNode(Graph, Blueprint, TimelineName, PosX, PosY, OutError);
 	}
+	else if (NodeType.Equals(TEXT("GetSubsystem"), ESearchCase::IgnoreCase) ||
+	         NodeType.Equals(TEXT("GetSubsystemFromPC"), ESearchCase::IgnoreCase))
+	{
+		FString SubsystemClass;
+		if (NodeParams.IsValid())
+		{
+			SubsystemClass = NodeParams->GetStringField(TEXT("subsystem_class"));
+			if (SubsystemClass.IsEmpty())
+				SubsystemClass = NodeParams->GetStringField(TEXT("class"));
+		}
+		// GetSubsystemFromPC is the LocalPlayer variant — right for EnhancedInputLocalPlayerSubsystem
+		const bool bFromPC = NodeType.Equals(TEXT("GetSubsystemFromPC"), ESearchCase::IgnoreCase)
+			|| SubsystemClass.Contains(TEXT("LocalPlayer"));
+		Context = SubsystemClass;
+		NewNode = CreateGetSubsystemNode(Graph, SubsystemClass, bFromPC, PosX, PosY, OutError);
+	}
 	else
 	{
 		OutError = FString::Printf(
@@ -293,7 +311,7 @@ UEdGraphNode* FBlueprintGraphEditor::CreateNode(
 			     "Add, Subtract, Multiply, Divide, PrintString, EnhancedInputAction, "
 			     "Cast, ForEach, ForEachWithBreak, DoOnce, Gate, Delay, "
 			     "Switch/SwitchInt/SwitchString/SwitchEnum, MakeStruct, BreakStruct, MakeArray, "
-			     "CustomEvent, Select, Timeline"),
+			     "CustomEvent, Select, Timeline, GetSubsystem, GetSubsystemFromPC"),
 			*NodeType);
 		return nullptr;
 	}
@@ -795,9 +813,11 @@ UClass* FBlueprintGraphEditor::FindClassByShortName(const FString& ClassName)
 		CommonClasses.Add(TEXT("SceneComponent"),   USceneComponent::StaticClass());
 		CommonClasses.Add(TEXT("KismetSystemLibrary"), UKismetSystemLibrary::StaticClass());
 		CommonClasses.Add(TEXT("KismetMathLibrary"),   UKismetMathLibrary::StaticClass());
-		CommonClasses.Add(TEXT("GameplayStatics"),     UGameplayStatics::StaticClass());
-		CommonClasses.Add(TEXT("UGameplayStatics"),    UGameplayStatics::StaticClass());
+		CommonClasses.Add(TEXT("GameplayStatics"),              UGameplayStatics::StaticClass());
+		CommonClasses.Add(TEXT("UGameplayStatics"),             UGameplayStatics::StaticClass());
 		CommonClasses.Add(TEXT("EnhancedInputLocalPlayerSubsystem"), UEnhancedInputLocalPlayerSubsystem::StaticClass());
+		CommonClasses.Add(TEXT("WidgetBlueprintLibrary"),       UWidgetBlueprintLibrary::StaticClass());
+		CommonClasses.Add(TEXT("UWidgetBlueprintLibrary"),      UWidgetBlueprintLibrary::StaticClass());
 	}
 	if (UClass** Found = CommonClasses.Find(ClassName))
 	{
@@ -866,7 +886,7 @@ UEdGraphNode* FBlueprintGraphEditor::CreateCallFunctionNode(
 		Function = UKismetMathLibrary::StaticClass()->FindFunctionByName(FName(*FunctionName), EIncludeSuperFlag::IncludeSuper);
 	}
 
-	// 3b. GameplayStatics and EnhancedInput subsystem
+	// 3b. GameplayStatics, EnhancedInput subsystem, WidgetBlueprintLibrary (SetInputMode_*)
 	if (!Function)
 	{
 		Function = UGameplayStatics::StaticClass()->FindFunctionByName(FName(*FunctionName), EIncludeSuperFlag::IncludeSuper);
@@ -874,6 +894,10 @@ UEdGraphNode* FBlueprintGraphEditor::CreateCallFunctionNode(
 	if (!Function)
 	{
 		Function = UEnhancedInputLocalPlayerSubsystem::StaticClass()->FindFunctionByName(FName(*FunctionName), EIncludeSuperFlag::IncludeSuper);
+	}
+	if (!Function)
+	{
+		Function = UWidgetBlueprintLibrary::StaticClass()->FindFunctionByName(FName(*FunctionName), EIncludeSuperFlag::IncludeSuper);
 	}
 
 	// 4. Common engine actor/component classes
@@ -1559,4 +1583,49 @@ UEdGraphNode* FBlueprintGraphEditor::CreateTimelineNode(
 	NodeCreator.Finalize();
 
 	return TimelineNode;
+}
+
+UEdGraphNode* FBlueprintGraphEditor::CreateGetSubsystemNode(
+	UEdGraph* Graph,
+	const FString& SubsystemClass,
+	bool bFromPlayerController,
+	int32 PosX, int32 PosY,
+	FString& OutError)
+{
+	if (SubsystemClass.IsEmpty())
+	{
+		OutError = TEXT("GetSubsystem requires 'subsystem_class' param (e.g. \"EnhancedInputLocalPlayerSubsystem\")");
+		return nullptr;
+	}
+
+	UClass* Class = FindClassByShortName(SubsystemClass);
+	if (!Class)
+	{
+		// Try script paths used by subsystem modules
+		static const TArray<FString> SubsystemPaths = {
+			TEXT("/Script/EnhancedInput."),
+			TEXT("/Script/Engine."),
+			TEXT("/Script/CoreUObject."),
+		};
+		for (const FString& Prefix : SubsystemPaths)
+		{
+			Class = FindObject<UClass>(nullptr, *(Prefix + SubsystemClass));
+			if (Class) break;
+		}
+	}
+	if (!Class)
+	{
+		OutError = FString::Printf(TEXT("GetSubsystem: class '%s' not found"), *SubsystemClass);
+		return nullptr;
+	}
+
+	// UK2Node_GetSubsystem handles all subsystem types including LocalPlayer subsystems
+	FGraphNodeCreator<UK2Node_GetSubsystem> NodeCreator(*Graph);
+	UK2Node_GetSubsystem* Node = NodeCreator.CreateNode();
+	Node->Initialize(Class);
+	Node->NodePosX = PosX;
+	Node->NodePosY = PosY;
+	NodeCreator.Finalize();
+
+	return Node;
 }

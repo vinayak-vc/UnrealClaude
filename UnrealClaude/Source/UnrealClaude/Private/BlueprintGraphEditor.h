@@ -237,6 +237,7 @@ private:
 	static UEdGraphNode* CreateCustomEventNode(UEdGraph* Graph, const FString& EventName, int32 PosX, int32 PosY, FString& OutError);
 	static UEdGraphNode* CreateSelectNode(UEdGraph* Graph, int32 PosX, int32 PosY, FString& OutError);
 	static UEdGraphNode* CreateTimelineNode(UEdGraph* Graph, UBlueprint* Blueprint, const FString& TimelineName, int32 PosX, int32 PosY, FString& OutError);
+	static UEdGraphNode* CreateGetSubsystemNode(UEdGraph* Graph, const FString& SubsystemClass, bool bFromPlayerController, int32 PosX, int32 PosY, FString& OutError);
 
 	/** Resolve a UScriptStruct by short name (FVector, FRotator, etc.) */
 	static UScriptStruct* FindStructByShortName(const FString& StructName);
