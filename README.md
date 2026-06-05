@@ -35,7 +35,7 @@ Tools operate on **live editor state** over an HTTP REST API, not on serialized 
    - `POST /mcp/tool/{name}` — execute a tool with a JSON body
    - `FMCPToolRegistry` registers **43 `FMCPToolBase` tools**. Editor-mutating work is marshalled onto the game thread and run through `FMCPTaskQueue` (async, bounded concurrency).
 
-2. **Node.js bridge** (`Resources/mcp-bridge/`, git submodule of [`ue5-mcp-bridge`](https://github.com/Natfii/ue5-mcp-bridge)). A stdio MCP server (`index.js`) that translates MCP ↔ the plugin's REST API. It:
+2. **Node.js bridge** (`UnrealClaude/Resources/mcp-bridge/`, vendored from [`ue5-mcp-bridge`](https://github.com/Natfii/ue5-mcp-bridge) and tracked directly in this repo — no submodule). A stdio MCP server (`index.js`) that translates MCP ↔ the plugin's REST API. It:
    - Caches the tool list (TTL `MCP_TOOL_CACHE_TTL_MS`, default 30 s).
    - **Classifies** every backend tool to keep the AI client's context small: *simple* (listed with full schema), *hidden* (callable but unlisted), *mega* (collapsed behind the `unreal_ue` router). Net surface: ~18 entries instead of 43.
    - **Auto-async**: wraps every non-read-only, non-`task_*` call as a queued task and polls until done — so long operations don't hit the request timeout. Read-only tools run synchronously.
@@ -219,13 +219,12 @@ Module dependencies (from `UnrealClaude.Build.cs`): `HTTPServer`, `HTTP`, `Socke
 
 This plugin must be built from source — no prebuilt binaries are shipped.
 
-### 1. Clone (with submodule)
+### 1. Clone
 
 ```bash
-git clone --recurse-submodules https://github.com/Natfii/UnrealClaude.git
-# already cloned without submodules:
-cd UnrealClaude && git submodule update --init
+git clone https://github.com/Natfii/UnrealClaude.git
 ```
+The MCP bridge lives at `UnrealClaude/Resources/mcp-bridge/` directly in this repo (no submodule to init).
 
 ### 2. Build the plugin
 
@@ -268,7 +267,7 @@ Menu → **Tools → Claude Assistant**. Streams responses, groups tool calls, r
 - **Source layout:** `Source/UnrealClaude/Private/MCP/` (server, registry, task queue, param validator) and `Private/MCP/Tools/` (one `MCPTool_*` per tool). Blueprint/anim editing helpers live in `Private/` (`BlueprintGraphEditor`, `AnimStateMachineEditor`, etc.).
 - **Adding a tool:** subclass `FMCPToolBase`, implement `GetInfo()` (params + annotations) and `Execute()` (validate with `MCPParamValidator` helpers), register it in `MCPToolRegistry.cpp`, add tests in `Private/Tests/`.
 - **Tests:** plugin automation — `Automation RunTests UnrealClaude` in the editor console. Bridge — `cd Resources/mcp-bridge && npm test` (Vitest, mocks the HTTP backend; runs without a live editor).
-- **Submodule workflow:** commit/push inside `Resources/mcp-bridge`, then `git add Resources/mcp-bridge` and commit the parent to record the new ref.
+- **Bridge:** `UnrealClaude/Resources/mcp-bridge/` is vendored directly (not a submodule) — edit and commit it like any other path. Upstream: [ue5-mcp-bridge](https://github.com/Natfii/ue5-mcp-bridge); this copy is ahead of upstream with the Sprint 1–4 tool additions.
 - **Commit prefixes:** `feat:`, `fix:`, `test:`, `docs:`, `refactor:`.
 
 ---
