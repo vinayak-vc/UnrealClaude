@@ -287,7 +287,7 @@ Menu → **Tools → Claude Assistant**. Streams responses, groups tool calls, r
 
 ## Credits
 
-- **Original author:** Natali Caggiano ([@Natfii](https://github.com/Natfii)) — UnrealClaude plugin + [ue5-mcp-bridge](https://github.com/Natfii/ue5-mcp-bridge).
+- **Original author:** Natali Caggiano ([@Natfii](https://github.com/Natfii)).
 - **Fork maintainer & contributor:** Vinayak Lakhani ([@vinayak-vc](https://github.com/vinayak-vc)) — Sprint 1–4 MCP tool additions, UE 5.5 API compatibility, submodule-to-vendored bridge migration, technical docs.
 - **AI pair:** Claude (Opus 4.8, Anthropic) via [Claude Code](https://claude.com/claude-code) — test fixes, README rewrites, repo restructuring, the `unrealclaude` skill.
 - **Protocol:** [Model Context Protocol](https://modelcontextprotocol.io/).
