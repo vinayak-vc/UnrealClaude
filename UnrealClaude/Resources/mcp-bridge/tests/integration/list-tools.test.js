@@ -304,6 +304,10 @@ describe("ListTools — router filtering", () => {
   it("excludes hidden tools (task_submit)", async () => {
     const result = await simulateListTools();
     expect(result.tools.find(t => t.name === "unreal_task_submit")).toBeUndefined();
-    expect(result.tools.find(t => t.name === "unreal_execute_script")).toBeUndefined();
+  });
+
+  it("exposes execute_script as a simple tool", async () => {
+    const result = await simulateListTools();
+    expect(result.tools.find(t => t.name === "unreal_execute_script")).toBeDefined();
   });
 });

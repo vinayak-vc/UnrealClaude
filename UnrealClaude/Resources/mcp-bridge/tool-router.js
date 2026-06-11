@@ -26,6 +26,7 @@ export const SIMPLE_TOOL_NAMES = new Set([
   "capture_viewport",
   "get_output_log",
   "blueprint_query",
+  "execute_script",     // exposed for direct Python/C++/console execution via MCP
 ]);
 
 // Hidden tools: callable but never listed
@@ -35,7 +36,6 @@ export const HIDDEN_TOOL_NAMES = new Set([
   "task_result",
   "task_list",
   "task_cancel",
-  "execute_script",
   "cleanup_scripts",
   "get_script_history",
   "run_console_command",
@@ -126,6 +126,7 @@ export function categorizeToolForStatus(toolName) {
   if (cls === "mega") return TOOL_TO_DOMAIN[toolName] || "utility";
   if (cls === "hidden") return toolName.startsWith("task_") ? "task_queue" : "scripting";
   // Simple tools
+  if (toolName === "execute_script") return "scripting"; // simple now, but report as scripting
   if (toolName.startsWith("asset_")) return "asset";
   if (toolName === "blueprint_query") return "blueprint";
   if (toolName === "open_level" || toolName === "level") return "level";
